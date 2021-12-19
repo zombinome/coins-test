@@ -10,26 +10,28 @@ import (
 	kittransport "github.com/go-kit/kit/transport"
 	kithttp "github.com/go-kit/kit/transport/http"
 	kitlog "github.com/go-kit/log"
+
+	servErr "test/coins/errors"
 )
 
-func MakeHandler(ts AccountService, logger kitlog.Logger) http.Handler {
-	r := mux.NewRouter()
-
-	opts := []kithttp.ServerOption{
+// Registers http handlers for account servicce
+// mr     - Mux router where handlers should be registered
+// svc    - service to register
+// logger - logger
+func RegisterHandlers(mr *mux.Router, svc AccountService, logger kitlog.Logger) {
+	var opts = []kithttp.ServerOption{
 		kithttp.ServerErrorHandler(kittransport.NewLogErrorHandler(logger)),
 		kithttp.ServerErrorEncoder(encodeError),
 	}
 
-	listAccountsHandler := kithttp.NewServer(
-		makeListAccountsEndpoint(ts),
+	var listAccountsHandler = kithttp.NewServer(
+		makeListAccountsEndpoint(svc),
 		decodeListAccontsRequest,
 		encodeResponse,
 		opts...,
 	)
 
-	r.Handle("/api/v1/accounts", listAccountsHandler).Methods("GET")
-
-	return r
+	mr.Handle("/api/v1/accounts", listAccountsHandler).Methods("GET")
 }
 
 type errorer interface {
@@ -51,11 +53,13 @@ func encodeResponse(ctx context.Context, wr http.ResponseWriter, response interf
 
 func encodeError(_ context.Context, err error, w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	switch err {
-	// case cargo.ErrUnknown:
-	// 	w.WriteHeader(http.StatusNotFound)
-	// case ErrInvalidArgument:
-	// 	w.WriteHeader(http.StatusBadRequest)
+	switch svcErr := err.(type) {
+	case servErr.ServiceError:
+		if svcErr.Kind() == servErr.ErrorKindDB {
+			w.WriteHeader(http.StatusInternalServerError)
+		} else {
+			w.WriteHeader(http.StatusBadRequest)
+		}
 	default:
 		w.WriteHeader(http.StatusInternalServerError)
 	}

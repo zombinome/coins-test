@@ -3,9 +3,9 @@ package account
 type AccountNumber uint64
 
 type Account struct {
-	Number AccountNumber
+	// Account number
+	Number AccountNumber `json:"number"`
 
-	Amount int64
-
-	LockedAmount int64
+	// Current account balance
+	Balance int64 `json:"balance"`
 }

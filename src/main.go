@@ -7,35 +7,63 @@ import (
 	"os/signal"
 	"syscall"
 	"test/coins/account"
-	"test/coins/payment"
+	"test/coins/db"
+	"test/coins/transfer"
+	"time"
 
 	"github.com/go-kit/log"
+	"github.com/gorilla/mux"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	var httpAddress = "http://localhost:8080"
+	// Loading database connection string
+	godotenv.Load()
+	var cs = os.Getenv("DATABASE_CS")
 
+	if cs == "" {
+		panic("unable to start service - connection string is not provided")
+	}
+
+	// Creating new connection pool
+	cnPool, err := db.NewConnectionPool(cs)
+	if err != nil {
+		panic("Unable to create connection pool: " + err.Error())
+	}
+
+	defer cnPool.Close()
+
+	// Initializing logger
 	var logger log.Logger
 	logger = log.NewLogfmtLogger(log.NewSyncWriter(os.Stderr))
 	logger = log.With(logger, "ts", log.DefaultTimestampUTC)
 	var httpLogger = log.With(logger, "component", "http")
 
-	var accountService = account.NewAccountService()
-	var paymentService = payment.NewPaymentService()
+	// Initializing services
+	var factory = func() (db.DbContext, error) {
+		return db.CreateContext(cnPool, time.Second*5)
+	}
+	var accountService = account.NewAccountService(factory)
+	var transferService = transfer.NewTransferService(factory)
 
-	var mux = http.NewServeMux()
-	mux.Handle("/api/v1/accounts", account.MakeHandler(accountService, httpLogger))
-	mux.Handle("/api/v1/payments", payment.MakeHandler(paymentService, httpLogger))
+	// Registering routes and handles
+	var mr = mux.NewRouter()
 
-	http.Handle("/", accessControl(mux))
+	account.RegisterHandlers(mr, accountService, httpLogger)
+	transfer.RegisterHandlers(mr, transferService, httpLogger)
+	http.Handle("/", accessControl(mr))
 
+	// Setting up http server
+	var httpAddress = "localhost:" + os.Getenv("PORT")
 	errs := make(chan error, 2)
 	go func() {
 		logger.Log("transport", "http", "address", httpAddress, "msg", "listening")
-		errs <- http.ListenAndServe(httpAddress, nil)
+		httpError := http.ListenAndServe(httpAddress, nil)
+		errs <- httpError
 	}()
 	go func() {
-		c := make(chan os.Signal)
+		c := make(chan os.Signal, 1)
 		signal.Notify(c, syscall.SIGINT)
 		errs <- fmt.Errorf("%s", <-c)
 	}()
@@ -43,7 +71,7 @@ func main() {
 	logger.Log("terminated", <-errs)
 }
 
-func accessControl(h http.Handler) http.Handler {
+func accessControl(h *mux.Router) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
